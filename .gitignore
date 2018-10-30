@@ -1,8 +1,19 @@
-local/
-logs/
+# R ignores
+.Rproj.user
+.Rproj
+.Rhistory
+.RData
+.Ruserdata
+# Python Ignores
 __pycache__/
 .ipynb_checkpoints
+.tags
 .snakemake
+.pytest_cache/
+# Other Ignores
+local/
+logs/
+
 
 # complex ignore of single files in subfolders
 # https://stackoverflow.com/a/35279076
