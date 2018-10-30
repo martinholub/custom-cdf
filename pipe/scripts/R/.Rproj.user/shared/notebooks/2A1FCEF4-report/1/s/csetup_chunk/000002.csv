@@ -1,0 +1,8 @@
+"0","#  save.image(file = ""~/tmp/snakemakeObj.RData"")"
+"0","#load(""snakemakeObj.RData"")"
+"0","#unlink(""snakemakeObj.RData"")"
+"0","knitr::opts_chunk$set(echo = TRUE)"
+"0","knitr::opts_chunk$set(error = TRUE)"
+"0","knitr::opts_knit$set(progress = TRUE, verbose = TRUE)"
+"0","knitr::opts_chunk$set(root.dir = snakemake@params$workdir)"
+"0","knitr::opts_knit$set(root.dir = snakemake@params$workdir)"

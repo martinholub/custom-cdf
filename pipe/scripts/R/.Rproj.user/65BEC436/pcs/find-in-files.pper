@@ -1,0 +1,10 @@
+{
+    "dialog-state" : {
+        "caseSensitive" : false,
+        "filePatterns" : [
+        ],
+        "path" : "~/git/git-dev/CustomCDF/pipe/scripts/R",
+        "query" : "brows",
+        "regex" : false
+    }
+}

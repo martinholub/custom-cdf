@@ -1,0 +1,22 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1540224573526.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "683886835",
+    "id" : "3474D22E",
+    "lastKnownWriteTime" : 1540387471,
+    "last_content_update" : 1540387471,
+    "path" : "~/git/git-dev/CustomCDF/pipe/scripts/R/r_tester.R",
+    "project_path" : "r_tester.R",
+    "properties" : {
+        "cursorPosition" : "40,29",
+        "scrollLine" : "24"
+    },
+    "relative_order" : 4,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

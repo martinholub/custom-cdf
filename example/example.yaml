@@ -1,0 +1,59 @@
+# Config file for CDF
+project: "test"
+version: "0.0.1"
+species: "Mus Musculus"
+platform: "Affymetrix"
+probes:
+  dir: data/probes
+  url:
+  file: probes.fa
+reference:
+  dir: data/reference
+  url:
+  file: mouse.transcripts.fa
+  merged: mouse.transcripts.fa # file == merged if single file
+  is_transcriptome: True
+index:
+  dir: data/index
+  prefix: mouse
+  suffix: ["1", "2", "3", "4", "rev.1", "rev.2"]
+annotation:
+  dir: data/annotation
+  url:
+  file: mouse.gtf
+alignment:
+  dir: data/alignment
+  prefix: mouse
+  max_mismatches: 0
+variants:
+  dir: data/variants
+  url:
+  file: mouse.vcf
+  filter: False
+  probe_clip: 5
+counts:
+  dir: data/counts
+  feature: "transcript" #  ("transcript", "exon")
+  metafeature: "gene" # ("gene", "transcript")
+  do_add_transcript_version: False
+  controls: ["affx", "antigenomic", "bac_spike", "bgp-", "intron", "exon",
+            "polya_spike", "unmapped", "FLmRNA"]
+results:
+  dir:
+    data/results
+report:
+  dir:
+    data/report
+
+chip:
+  rows: 1190
+  cols: 1190
+  probe_length: 25
+
+cdf:
+  name:
+  dir: "data/cdf"
+  sense: "ST"
+  multimatch_level: "gene" # ("transcript", "")
+  min_probeset_size: 1
+  whitelist: "" # path to file

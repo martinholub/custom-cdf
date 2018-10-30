@@ -1,0 +1,570 @@
+"""
+Author: M. Holub
+Affiliation: Nebion
+Aim: Custom CDF creation workflow
+Date: Oct 2018
+Run: snakemake -pr -j2 -d=/path/to/pipe --configfile=/path/to/config.yaml -s=Snakefile -n
+Latest modification: Solved cyclic dependency in merge ref
+Notes: |
+    `ancient`, may not be needed at all times, `temp` can be used more often
+"""
+import os
+from os.path import join
+from os.path import expanduser as home
+import glob
+from snakemake.utils import min_version
+from scripts.cdf_utils import ( CdfPipeException, output_cdf_selector,
+                                extract_script_selector, normalize_cdf_name,
+                                rm_ext, select_merge_filename, do_merge_reference)
+
+min_version("3.2")
+snake_dir = os.path.dirname(srcdir("Snakefile"))
+
+# Constraint sample names wildcards
+wildcard_constraints:
+    prb=".*\.fa",
+    anno=".*\.gtf",
+    suffix="^(rev\.|.?)\d$",
+    prefix="^[^\.].*$",
+    align_prefix="[^out]", # no dot in file name
+    ref=".*(dna|cdna)\.(chromosome|toplevel|all)"+
+        "(([1-9]|1[0-9])|2[1-5]|MT| ?)\.fa$"
+    #ref=".*\.fa$",
+    #refid="([0-9]+|MT)",
+
+# Define paths and vars:
+prb_dir = config["probes"]["dir"]
+ref_dir = config["reference"]["dir"]
+ind_dir = config["index"]["dir"]
+ann_dir = config["annotation"]["dir"]
+ali_dir = config["alignment"]["dir"]
+cnt_dir = config["counts"]["dir"]
+cdf_dir = config["cdf"]["dir"]
+var_dir = config["variants"]["dir"]
+res_dir = config["results"]["dir"]
+rep_dir = "data/report"
+
+files = [config[k]["file"] for k in ["probes", "annotation"]]
+dirs = [config[k]["dir"] for k in ["probes", "annotation"]]
+paths_gunzip = [join(d,f) for d,f in zip(dirs, files)]
+suffix = config["index"]["suffix"]
+prefix = config["index"]["prefix"]
+align_prefix = config["alignment"]["prefix"]
+cdf_name = align_prefix if not config["cdf"]["name"] else config["cdf"]["name"]
+
+cdf_name = normalize_cdf_name(cdf_name, config["cdf"]["sense"])
+
+# If there are some conflicts in ordering
+# ruleorder: unzip_data > bowtie_build > bowtie_align > samtools_sort > snp_filter > samtools_index > count_features
+
+rule all:
+    """
+    A wrapper rule that controls execution of the workflow.
+
+    Define as "input" the files that you require to be generated through
+    the workflow. This in turn determines which rules will be executed. Intermediate
+    rules will be executed and files created as needed.
+    """
+    input:
+        index = join(ali_dir, align_prefix + ".out.bam.bai"),
+        results= join(res_dir, align_prefix + "_results.txt"),
+        cdf = output_cdf_selector(config["platform"].lower(), cdf_dir, cdf_name),
+        report = "data/report/report.html",
+        gzips = expand("{path}.gz", path = paths_gunzip),
+
+# if config["do_setup"]:
+rule setup_workflow:
+    """
+    Download files needed for the workflow.
+
+    `ancient` flag prevents snakemake from checking for changes in file's timestamp.
+    It is advisable on files that do not change and/or are big and difficult to obtain.
+
+    See also:
+      scripts/setup_workflow.py
+
+    References:
+      `ancient`: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#ignoring-timestamps
+      `touch`: https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#flag-files
+    """
+    input:
+    output:
+        touch("is_ready.check"), # can pass as input to unzip.
+        ancient(expand("{path}.gz", path = paths_gunzip)),
+        ancient(glob.glob(join(ref_dir, config["reference"]["file"] + ".gz"))),
+        ancient(join(var_dir, config["variants"]["file"] + ".gz"))
+    priority: 10
+    # conda: "envs/cdf.yml"
+    script:
+        "scripts/setup_workflow.py"
+
+rule unzip_data:
+    """
+    Some tools may require their input to be (g)unzipped.
+    """
+    input:
+        ancient(expand("{path}.gz", path = paths_gunzip)),
+        ancient(glob.glob(join(ref_dir, config["reference"]["file"] + ".gz"))),
+        ancient(join(var_dir, config["variants"]["file"] + ".gz"))
+    output:
+        other = expand("{path}", path = paths_gunzip),
+        ref = ([re.sub("\.gz$","",x) for x in \
+                    glob.glob(join(ref_dir, config["reference"]["file"] + ".gz"))]),
+        vcf = join(var_dir, config["variants"]["file"])
+    shell:
+        """
+        for f in {input}
+        do
+            # mkdir --parents $f
+            [[ $f == *.gz ]] && gunzip --keep $f
+        done
+        """
+
+rule merge_ref:
+    """
+    Merges multiple reference FASTA files into single file
+
+    It is simpler to work with single reference file. However, occasionally we may
+    want to align only to select subset of chromosomes or selct part of genome.
+    In such case, the select files are placed in `reference` directory
+    and this rule merges them into a single file.
+
+    The file is not zipped as it is needed as-is later.
+
+    Importanty `config["alignment"]["prefix"]` MUST equal to `chip_name` appearing
+    in the FASTA probes file. See *config*'s `readme` for more information
+    """
+    input:
+        ancient(rules.unzip_data.output.ref)
+    output:
+        select_merge_filename(ref_dir, config["reference"])
+    run:
+        if input != output: shell("cat {input} > {output}")
+
+rule normalize_probenames:
+    """Probenames can have different format even for same platform
+
+    Uses heuristics to make them compatible with pipeline.
+    """
+    input:
+        ancient(join(prb_dir, config["probes"]["file"]))
+    output:
+        join(prb_dir, "normalized", config["probes"]["file"])
+    priority: 5 # to make execute before align
+    log: "logs/probenames/{}.log".format(align_prefix)
+    # conda: "envs/cdf.yml"
+    params:
+        chip_type = config["alignment"]["prefix"]
+    script:
+        "scripts/normalize_probenames.py"
+
+rule unique_probes:
+    """
+    Remove duplicate occurences of probes in chip FASTA file
+
+    This rule removes duplicate entries from list of probes on a chip formated as
+    fasta file. The duplicates are often due to assignement of one probe to multiple genomic
+    loci (ideally, such duplication would not appear in probes FASTA file).
+
+    References:
+      https://www.biostars.org/p/143617/
+    """
+    input:
+        rules.normalize_probenames.output,
+    output:
+        uniq = join(prb_dir, rm_ext(config["probes"]["file"]) + "_uniq.fa"),
+        uniq_gz = join(prb_dir, rm_ext(config["probes"]["file"]) + "_uniq.fa.gz"),
+        dups = join(prb_dir, rm_ext(config["probes"]["file"]) + ".dups.txt"),
+    log:
+        "logs/probes/{}.log".format(align_prefix)
+    params:
+        script = join(snake_dir, "scripts/filter_probes.sh"),
+    run:
+        shell("chmod u+x {params.script}"),
+        shell("bash {params.script} {input} {output.uniq} {output.dups} &> {log}")
+
+rule bowtie_build:
+    """
+    Build bowtie index from unzipped reference fasta
+
+    The building of index takes some time. For 1.3 GBp it takes rougly 20 minutes
+    on 2 threads.
+
+    # Option 1:
+        # Input to bowtie-build must be COMMA SEPARATED list of UNZIPPED files.
+        input: ancient(rules.unzip_data.output.ref)
+        shell: "bowtie-build -f --threads {threads} --seed 0 $(echo {input} | sed 's/ /,/g') {params.base_name} &> {log}"
+    # Option 2: (preferred)
+        # Input can be also a single file that was already combined
+        input: ancient(rules.merge_ref.output)
+        shell: "bowtie-build -f --threads {threads} --seed 0 {input} {params.base_name} &> {log}"
+
+    References:
+        bowtie-build: http://bowtie-bio.sourceforge.net/manual.shtml#the-bowtie-build-indexer
+    """
+
+    input:
+        ancient(rules.merge_ref.output) if do_merge_reference(config["reference"]) else rules.unzip_data.output.ref
+    output:
+        index = expand("{ind_dir}/{prefix}.{suffix}.ebwt",
+                        suffix = suffix, prefix = prefix, ind_dir = ind_dir)
+    params:
+        base_name = join(ind_dir, prefix),
+    log:
+        "logs/bowtie_build/{}.log".format(align_prefix)
+    threads: 2
+    # conda: "envs/cdf.yml"
+    shell:
+        "bowtie-build -f --threads {threads} --seed 0 {input} "
+        "{params.base_name} &> {log}"
+
+# rule gzip_data:
+#     """Gzip pack ungzipped
+#
+#     Not used as we `gunzip --keep`
+#     """
+#     input:
+#         ancient(expand("{path}", path = paths_gunzip))
+#     output: # rules without output will not be executed
+#         expand("{path}.gz", path = paths_gunzip),
+#     shell:
+#         "yes n | gzip {input}"
+
+rule bowtie_align:
+    """
+    Align probes to genomic or transcriptomic locations.
+
+    Important settings for `bowtie`:
+    -v=0 ... Only alignments with at most 0 mismatches are valid
+    --all ... Report all valid alignements (including multihitters)
+    --tryhard ... Try as hard as possible to find valid alignments when they exist
+    --best ...  Note that --best does not affect which
+                alignments are considered "valid" by bowtie, only
+                which valid alignments are reported by bowtie.
+                When --best is specified and multiple hits are
+                allowed (via -k or -a), the alignments for a given
+                read are guaranteed to appear in best-to-worst order
+                in bowtie's output.
+    -f ... input is FASTA format
+    --no-unal ... Suppress SAM records for reads that failed to align
+    --mm ... Use memory-mapped I/O to load the index, rather than normal C file I/O
+
+
+    References:
+        bowtie: http://bowtie-bio.sourceforge.net/manual.shtml#the-bowtie-aligner
+
+    """
+    input:
+        index = rules.bowtie_build.output.index,
+        probes = rules.unique_probes.output.uniq_gz
+    output:
+        sam =expand("{ali_dir}/{align_prefix}.sam",
+                    ali_dir = ali_dir, align_prefix = align_prefix)
+    params:
+        base_name = join(ind_dir, prefix),
+        max_mismatches = config["alignment"]["max_mismatches"],
+        unali = join(ali_dir, align_prefix + "_unaligned.fa"), # unaligned
+        ali = join(ali_dir, align_prefix + "_aligned.fa"), # aligned
+        toomany = join(ali_dir, align_prefix + "_toomany.fa") # hits exceeding limit (none if --all)
+    log:
+        "logs/bowtie_align/{}.log".format(align_prefix)
+    threads: 2
+    # conda: "envs/cdf.yml"
+    shell:
+        "bowtie --all -v {params.max_mismatches} -f --best --nomaqround --tryhard --time "
+        # "--nofw " # align just to one strand
+        # --sam-nosq/--sam-nohead # drop header
+        "--mm --seed 0 --verbose --threads {threads} --sam --no-unal "
+        "--al {params.ali} --un {params.unali}  --max {params.toomany} "
+        "{params.base_name} {input.probes} {output.sam} &> {log}"
+
+# include: "rules/blast_rules.smk" # this is a stub as BLAST not used anymore
+
+rule samtools_sort:
+    """
+    Sorts alignments and converts to binary format
+
+    References:
+        samtools: http://www.htslib.org/doc/samtools.html
+    """
+    input:
+        rules.bowtie_align.output.sam
+        # rules.clean_alignments.output.filt # for BLAST
+    output:
+        temp(expand( "{ali_dir}/{align_prefix}.bam", ali_dir = ali_dir,
+                    align_prefix = align_prefix))
+    threads: 2
+    # conda: "envs/cdf.yml"
+    log:
+        "logs/samtools/{}.log".format(align_prefix)
+    params:
+        tmp_dir = join(ali_dir, "tmp")
+    shell:
+        "samtools view -bS {input} | samtools sort -T {params.tmp_dir} "
+        "-o {output} -@ {threads} &> {log}"
+
+rule snp_transcriptome:
+    """Obtain SNP coordinates as appearing in transcripts
+
+    VCF file is chromosome based. Using information from GTF, we can convert it to
+    a transcript based cooridinates. This is implemented such that the result can be
+    passed to `snp_filter` rule.
+    """
+    input:
+        anno =  join(ann_dir, config["annotation"]["file"]),
+        vcf = join(var_dir, config["variants"]["file"]),
+    output:
+        join(var_dir, rm_ext(config["annotation"]["file"]) + ".transc.vcf.gz")
+    log:
+        "logs/variants/{}.transc.log".format(align_prefix)
+    # conda: "envs/cdf.yml"
+    script:
+        "scripts/transcript_snp.py"
+
+rule snp_filter:
+    """
+    Filter out alignments that centrally overlap with known SNP loci
+
+    VCF file of variants is first converted to BED file. Only SNV loci
+    are retained and those with name starting with ^tmp are dropped. File
+    is sorted and indexed for memory-efficient access.
+
+    The obtained BED file is intersected with another BED file obtained from BAM
+    file of alignments. If there is an intersection of a central part of alignment
+    (where central means trimming {params.clip} from both ends) with a SNV loci,
+    the alignment is dropped. This is done by filtering the input BAM file once more,
+    this time by retaining only such alignments that were preserved in the BED file.
+
+    Finaly '@CO\tfilter=snvs' line is appended to the resulting BAM file to indicate
+    that filtering was done.
+
+    If no filtering is required (`config['variants']['filter']==False`), input file
+    is just renamed for consistency with following rules.
+    """
+    input:
+        # Avoids creating snp_transcriptome if not used later by not requring it here
+        vcf=rules.snp_transcriptome.output if (config["reference"]["is_transcriptome"] \
+                                            and bool(config["variants"]["filter"]))
+                                        else expand("{var_dir}/{var_file}.gz", var_dir = var_dir,
+                                        var_file = config["variants"]["file"]),
+        bam = rules.samtools_sort.output
+    output:
+         expand("{ali_dir}/{align_prefix}.out.bam", ali_dir = ali_dir,
+                align_prefix = align_prefix)
+    params:
+        clip = config["variants"]["probe_clip"],
+        script = join(snake_dir, "scripts/filter_snp.sh")
+    log:
+        "logs/variants/{}.log".format(align_prefix)
+    # conda: "envs/cdf.yml"
+    run:
+        if bool(config["variants"]["filter"]):
+            shell("chmod u+x {params.script}")
+            shell(  "bash {params.script} --vcf {input.vcf} --bam {input.bam} " + \
+                    "--clip {params.clip} --output {output} &> {log}")
+        else:
+            shell("cp {input.bam} {output}")
+            shell("""echo "No SNP filtering was done" > {log}""")
+
+rule samtools_index:
+    """
+    Indexes BAM file of alignments for fast access
+    """
+    input:
+        rules.snp_filter.output
+    output:
+        temp(expand("{ali_dir}/{align_prefix}.out.bam.bai", ali_dir = ali_dir,
+                align_prefix = align_prefix))
+    priority: 5 # to make rule execute before count_features
+    # conda: "envs/cdf.yml"
+    shell:
+        "samtools index -b {input} {output}"
+
+rule bam_to_sam:
+    """Recovers SAM format after SNP filtering"""
+    input:
+        rules.snp_filter.output
+    output:
+        temp(expand("{ali_dir}/{align_prefix}.out.sam", ali_dir = ali_dir,
+                    align_prefix = align_prefix))
+    # conda: "envs/cdf.yml"
+    shell:
+        "samtools view -h -o {output} {input}"
+
+rule count_features:
+    """
+    Counts alignments to features and reports on metafeature level
+
+    The rule assumes that alignments to genome are available as BAM file. It uses
+    the annotation file to assing genomic hits to features and aggregate the information
+    on meatefature level (by default 'exon' and 'gene_id').
+
+    -O ... Assign reads to all their overlapping metafeatures
+    --minOverlap ... Minimum number of overlapthat is required for read assignment
+    -M ... count also multimapping reads
+    -s ... perform-strand specific counting (0=unstranded, 1=stranded, 2=reverse-stranded)
+       ... 2 select as we are aligning probes, not reads
+
+    Further interesting options are:
+    -f ... perform counting at feature (not metafeature) level
+    --read2pos, --readExtension3, --readExtension5, --fraction, --nonSplitOnly,
+    --primary, --ignoreDup
+
+    For documentation of the options, see
+    http://bioinf.wehi.edu.au/subread-package/SubreadUsersGuide.pdf
+
+    """
+    input:
+        anno = ancient(join(ann_dir, config["annotation"]["file"] + ".gz")),
+        bam = rules.snp_filter.output,
+        bai = rules.samtools_index.output,
+    output:
+        tmp = join(cnt_dir, align_prefix+".txt"),
+        summary = join(cnt_dir, align_prefix+".txt.summary"),
+        # counts = join(cnt_dir, align_prefix+".sam.featureCounts.sam"),
+        counts = join(cnt_dir, align_prefix+".out.bam.featureCounts.sam"),
+    log:
+        "logs/counts/{}.log".format(align_prefix)
+    params:
+        feature = config["counts"]["feature"],
+        metafeature = config["counts"]["metafeature"] + "_id",
+        length = config["chip"]["probe_length"]
+    threads: 2
+    # conda: "envs/cdf.yml"
+    #example: featureCounts -t exon -g gene_id -T 2 -R SAM -J -G data/reference/Arabidopsis_thaliana.TAIR10.dna.toplevel.fa -M -O --minOverlap 25 -a data/annotation/Arabidopsis_thaliana.TAIR10.39.gtf -o data/counts/AraGene-1_1-st-v1.noSNP.txt data/alignement/AraGene-1_1-st-v1.noSNP.bam
+    shell:
+        "featureCounts -t {params.feature} -g {params.metafeature} -T {threads} "
+        "--fracOverlap 1.0 --primary " # `--minOverlap {params.length}``
+        "-s 0 -O --verbose -M " # --fraction
+        "-R SAM -a {input.anno} -o {output.tmp} {input.bam} &> {log}"
+
+rule extract_data:
+    """
+    Parses counts data to format required to build R CDF or ChipDB packages
+
+    Additionally doublechecks that reads align to single strand. Each gene is thus
+    represented only by probes that share strand (as one would expect for array
+    implementing one sense).
+
+    The output is such that it can be fed for scripts creating either CDF or ChipDB.
+    Extension to Illumina platform is to be implemented, but should not differ
+    much from approach used for Agilent.
+    """
+    input:
+        sam =   rules.bam_to_sam.output if config["reference"]["is_transcriptome"] \
+                                        else rules.count_features.output.counts,
+        anno =  ancient(join(ann_dir, config["annotation"]["file"])) \
+                                        if config["reference"]["is_transcriptome"] \
+                                        else rules.count_features.output.tmp
+    output:
+        join(res_dir, align_prefix + "_results.txt")
+    log:
+        "logs/results/{}.log".format(align_prefix)
+    params:
+        chip_type = config["alignment"]["prefix"]
+    # conda: "envs/cdf.yml"
+    script: # script path is always relative to the Snakefile
+        "scripts/extract_data.py"
+
+rule make_cdf:
+    """
+    Creates a CDF package to be used for Affymetrix Microarray Analysis
+
+    The creation is handled by R script that formats the input, writes a CDF file
+    and creates an R package from the files.
+
+    For documentation of parametes see readme in config folder.
+
+    Requires:
+        R: affxparser, makecdfenv, optparse
+    """
+    # TODO: test heavily
+    input:
+        rules.extract_data.output
+    output:
+        expand("{cdf_dir}/{cdf_name}.cdf",
+                cdf_dir = cdf_dir, cdf_name = cdf_name + "cdf")
+    params:
+        rows = config["chip"]["rows"],
+        cols = config["chip"]["cols"],
+        species = config["species"],
+        script = join(snake_dir, "scripts/R/make_cdf.R")
+    # The log file has to use the same wildcards as output files, expand does not produce wildcards
+    log:
+        "logs/cdf/{}.log".format(cdf_name + "cdf")
+    conda: "envs/cdf_r.yml"
+    shell:
+        "Rscript --vanilla {params.script} -i {input} -o {output} "
+        "-r {params.rows} -c {params.cols} -s '{params.species}' &> {log}"
+
+rule make_annodb:
+    """
+    Creates a Annotation DB package to be used with Agilent Microarray Analysis
+
+    The creation is handled by R script that converts the results of counts extraction
+    obtained in preceding rule.
+
+    Requires:
+        R: biomaRt, AnnotationForge, OrganismDbi, AnnotationDbi, DBI
+
+    TODO:
+        Wrap R script into function and document
+    """
+    input:
+        rules.extract_data.output
+    output:
+        expand("{cdf_dir}/{cdf_name}.db",
+                cdf_dir = cdf_dir, cdf_name = cdf_name + "db")
+    params:
+        chip = align_prefix,
+        snake_dir = snake_dir,
+    log:
+        "logs/cdf/{}.log".format(cdf_name + "db")
+    conda: "envs/cdf_r.yml"
+    script:
+        "scripts/R/make_annodb.R"
+
+rule workflow_graph:
+    """
+    Create DAG graph of the workflow
+
+    As we pass --workdir and --configfile on CL, obtaining their pahths here is
+    bit cumbersome.
+    """
+    input:
+        loc = srcdir("Snakefile"),  # path to snakefile
+        # wait for CDF to be ready
+        placeholder = output_cdf_selector(config["platform"].lower(), cdf_dir, cdf_name),
+    output:
+        join(rep_dir, "workflow.svg")
+    params:
+        cfg = workflow.overwrite_configfile # path to config
+    # conda: "envs/cdf.yml"
+    shell:  "snakemake --dag --snakefile {input.loc} --configfile {params.cfg} | dot -Tsvg > {output}"
+
+rule report:
+    """
+    Create a HTML report summarizing the workflow
+
+    Information for summary statistics are pulled out from log files, relying
+    on regex expressions. This is not exactly robust, but quite straightforward.
+    Note that the script producing report must be adapted if the pipeline changes
+    to reflect these changes.
+
+    Notes:
+      Later brainstorm if necessary values could not be stored in one place.
+
+    Example
+    ------------
+    Rscript -e 'rmarkdown::render("~/tmp/report.Rmd", output_file="~/tmp/report.html", quiet=TRUE)'
+    """
+    input:
+        graph = rules.workflow_graph.output,
+        logs = glob.glob("logs/*/*.log"),
+    output:
+        join(rep_dir, "report.html")
+    params:
+        workdir = os.getcwd()
+    conda: "envs/cdf_r.yml"
+    script:
+        "scripts/R/report.Rmd"

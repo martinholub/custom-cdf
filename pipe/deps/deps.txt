@@ -1,0 +1,12 @@
+R:
+biomaRt>=2.34.2
+AnnotationForge>=1.23.3
+OrganismDbi>=1.20.0 (*)
+AnnotationDbi>=1.40.0
+DBI>=0.8
+affxparser>=1.50.0 (*)
+makecdfenv>=1.54.0 (*)
+optparse>=1.4.4
+knitr>=1.20
+
+(*) - No available recipes for r-3.5.1. Need to contribute them to use cdf_r35 environment

@@ -1,0 +1,71 @@
+# Config file for CDF
+project: "MM Transcriptomic CDF"
+version: "0.1"
+species: "Mus musculus"
+platform: "Agilent"
+
+probes:
+  dir: data/probes
+  url: # earray.chem.agilent.com/earray/
+  file: FASTA_028005_D_Fasta_20171030.txt
+reference:
+  dir: data/reference
+  url: # /rnaseq/reference/reference_transcriptomes/Mus_musculus_GRCm38_p5/Mus_musculus_GRCm38_p5.transcripts.fa
+  file: Mus_musculus_GRCm38_p5.transcripts.fa
+  merged: Mus_musculus_GRCm38_p5.transcripts.fa # file == merged if single file
+  is_transcriptome: True
+index:
+  dir: data/index
+  prefix: MM_GRCm38
+  suffix: ["1", "2", "3", "4", "rev.1", "rev.2"]
+annotation:
+  dir: data/annotation
+  url: ftp://ftp.ensembl.org/pub/release-93/gtf/mus_musculus/Mus_musculus.GRCm38.93.gtf.gz
+  file: Mus_musculus.GRCm38.93.gtf
+alignment:
+  dir: data/alignment
+  prefix: MM_8x60K
+  max_mismatches: 0
+variants:
+  dir: data/variants
+  url: ftp://ftp.ensembl.org/pub/release-93/variation/vcf/mus_musculus/mus_musculus.vcf.gz
+  file: mus_musculus.vcf
+  filter: False
+  probe_clip: 5
+counts:
+  dir: data/counts
+  feature: "transcript" #  ("transcript", "exon")
+  metafeature: "gene" # ("gene", "transcript")
+  do_add_transcript_version: True
+  controls: ["affx", "antigenomic", "bac_spike", "bgp-", "intron", "exon",
+            "polya_spike", "unmapped", "FLmRNA"]
+results:
+  dir:
+    data/results
+report:
+  dir:
+    data/report
+
+chip:
+  rows: 1190
+  cols: 1190
+  probe_length: 60 # used ONLY in report
+
+cdf:
+  name:
+  dir: "data/cdf"
+  sense: "AT"
+  multimatch_level: "gene" # ("transcript", "")
+  min_probeset_size: 1
+  whitelist: "" # path to file
+  # Agi Specific
+  tax_id: "10090" # https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi
+  org_db: "org.Mmusculus.eg.db" # https://bioconductor.org/packages/3.7/data/annotation/
+  schema:  # use if org_db NOT installed, but schema available `AnnotationForge::available.chipdbschemas()`
+  # Agi Specific - Optional
+  dset: mmusculus_gene_ensembl
+  biomart: ensembl
+  host: www.ensembl.org
+  in_id: ensembl_gene_id
+  out_id:  # entrezgene no conversion done if empty
+  attrs: #["entrezgene","ensembl_transcript_id","description","external_gene_name"]

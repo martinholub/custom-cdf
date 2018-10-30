@@ -1,0 +1,60 @@
+# Config file for CDF
+project: "Maize Genome Array"
+version: "0.1"
+species: "Zea mays"
+platform: "Affymetrix"
+
+probes:
+  dir: data/probes
+  url: http://www.affymetrix.com/analysis/downloads/data/Maize.probe_fasta.zip
+  file: MaizeGenomeArray.probe.fa
+reference:
+  dir: data/reference
+  url: ftp://ftp.ensemblgenomes.org/pub/release-40/plants/fasta/zea_mays/cdna/Zea_mays.AGPv4.cdna.all.fa.gz
+  file: Zea_mays.AGPv4.cdna.all.fa
+  merged: #Zea_mays.AGPv4.cdna.all.fa
+  is_transcriptome: True
+index:
+  dir: data/index
+  prefix: ZM_AGPv4
+  suffix: ["1", "2", "3", "4", "rev.1", "rev.2"]
+annotation:
+  dir: data/annotation
+  file: Zea_mays.AGPv4.40.gtf
+  url: ftp://ftp.ensemblgenomes.org/pub/release-40/plants/gtf/zea_mays/Zea_mays.AGPv4.40.gtf.gz
+alignment:
+  dir: data/alignment
+  prefix: maize
+  max_mismatches: 0
+variants:
+  dir: data/variants
+  url: ftp://ftp.ensemblgenomes.org/pub/release-40/plants/vcf/zea_mays/zea_mays.vcf.gz
+  file: zea_mays.vcf
+  filter: False
+  probe_clip: 5
+counts:
+  dir: data/counts
+  feature: "transcript" #  ("transcript", "exon")
+  metafeature: "gene" # ("gene", "transcript")
+  do_add_transcript_version: True
+  controls: ["affx", "antigenomic", "bac_spike", "bgp-", "intron", "exon",
+            "polya_spike", "unmapped", "FLmRNA"]
+results:
+  dir:
+    data/results
+report:
+  dir:
+    data/report
+
+chip:
+  rows: 732
+  cols: 732
+  probe_length: 25 # used ONLY in report
+
+cdf:
+  name: maizecustom # no special cahracters, `cdf` will be appended
+  dir: "data/cdf"
+  sense: "AT" # see readme
+  multimatch_level: "gene" # or transcript or empty
+  min_probeset_size: 3
+  whitelist: ""

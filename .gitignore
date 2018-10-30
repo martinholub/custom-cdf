@@ -1,0 +1,24 @@
+local/
+logs/
+__pycache__/
+.ipynb_checkpoints
+.snakemake
+
+# complex ignore of single files in subfolders
+# https://stackoverflow.com/a/35279076
+example/data/*
+!example/data/annotation/
+example/data/annotation/*
+!example/data/annotation/mouse.gtf.gz
+
+!example/data/probes/
+example/data/probes/*
+!example/data/probes/probes.fa.gz
+
+!example/data/reference/
+example/data/reference/*
+!example/data/reference/mouse.transcripts.fa.gz
+
+!example/data/variants/
+example/data/variants/*
+!example/data/variants/mouse.vcf.gz

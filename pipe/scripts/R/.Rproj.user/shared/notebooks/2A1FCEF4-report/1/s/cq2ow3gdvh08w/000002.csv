@@ -1,0 +1,5 @@
+"0","# not currently implemented
+tx <- readLines(logs$counts)
+"
+"2","Error in readLines(logs$counts) : 'con' is not a connection
+"

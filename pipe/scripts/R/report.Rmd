@@ -1,0 +1,215 @@
+---
+title: "Custom CDF Genertion Report"
+author:
+    - "Martin Holub"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+params:
+  rmd: "report.Rmd"
+output:
+  # pdf_document:
+  #   citation_package: natbib
+  #   fig_caption: yes
+  #   fig_height: 6
+  #   fig_width: 7
+  #   highlight: pygments
+  #   number_sections: yes
+  html_document:
+    highlight: pygments
+    number_sections: no
+    theme: default
+    fig_height: 6
+    fig_width: 7
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+    pandoc_args: ["--filter", "pandoc-fignos"] # --resource-path=/some/path" .. can be helpful
+    # fig_caption: yes
+    # pip install pandoc-fignos && sudo apt-get install texlive-latex-extra
+urlcolor: blue
+bibliography: #"bibliography.bib" # https://stackoverflow.com/a/33564125
+link-citations: true
+---
+<!-- snakemake -->
+
+
+``` {r setup, include = TRUE, echo = FALSE, eval = TRUE}
+this_wd <- getwd()
+save.image(file = "~/tmp/snakemakeObj.RData")
+#load("snakemakeObj.RData")
+#unlink("snakemakeObj.RData")
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(error = TRUE)
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+knitr::opts_chunk$set(root.dir = snakemake@params$workdir)
+knitr::opts_knit$set(root.dir = snakemake@params$workdir)
+```
+
+
+``` {r globals, incldue=FALSE, echo=FALSE}
+# Here we create some global definitions for the execution
+logs <- setNames(as.list(snakemake@input$logs),
+                 gsub("(.*logs/)(.*)(/.*.log$)", "\\2", snakemake@input$logs))
+```
+# Report for Custom CDF Pipeline
+
+We use `snakemake`[@Koster2012] v5.3.0 for binding the idnividual bioinfirmatics steps into a reprodicble workdlow. All steps can be seen in Figure @fig:description.
+
+<center>
+
+![CDF Generation Workflow](`r normalizePath(snakemake@input$graph)`){#fig:description}
+
+</center>
+
+Platform: `r snakemake@config$platform`\
+Chip Type: `r snakemake@config$alignment$prefix`\
+Species: `r snakemake@config$species`\
+Work Dir: `r snakemake@params$workdir`\
+Read Length: `r snakemake@config$chip$probe_length`\
+SNP Filtering: `r snakemake@config$variants$filter`\
+
+*This is a stub. The report should be extended if needed in the future to include results from the whole pipeline. e.g for presentations to customers, or internally. As now the pipeline is relatively mature, I suggest to pull the data from `data` folder rather than from `logs`. This should be more reliable.*
+
+
+## Bowtie Build & Align
+
+``` {r unique_probes, include=FALSE, echo=FALSE, eval = TRUE}
+tx <- readLines(logs$probes)
+probes <- sapply(c("total", "uniq"), function(x) NULL)
+probes$total <- gsub("Total number of probes: ([0-9]+)", "\\1",
+                             grep("^Total", tx, value = TRUE))
+probes$uniq <- gsub("Number of unique probes: ([0-9]+)", "\\1", grep("^Number", tx, value = TRUE))
+probes_percent_left <- round(as.numeric(probes$uniq) / as.numeric(probes$total) * 100, 2)
+probes_percent_left <- paste0("(", probes_percent_left,"%)")
+
+```
+
+First we generate a genomic reference with `bowtie`'s (v 1.2.2) `bowtie-build` command. As reference we use *`r snakemake@config$reference$file`* downloaded from [Ensembl Plants](http://plants.ensembl.org/info/website/ftp/index.html) or [Ensembl](http://www.ensembl.org/info/data/ftp/index.html). Then we fetch the probes from manufacutrers website (e.g. for [Zebrafish](https://www.thermofisher.com/order/catalog/product/902004?SID=srch-srp-902004)), and drop any sequences that are repeated in the file (to be extended.)
+
+Total probes | Unique probes
+:---: | :---:
+`r probes$total` | `r paste(probes$uniq, probes_percent_left)`
+
+We then align the unique probes ( from *`r snakemake@config$probes$file`*) to the reference with parameters:
+
+Parameter | Value | Meaning
+:---: | :---: | :---:
+`-v` | 0 | Only alignments with at most 0 mismatches are valid
+`--all` | - | Report all valid alignements
+`--seed` | 0 | Set random seed to 0
+`--best` | - | Guarantee that reported alignements are the best
+`--tryhard`| - | Try as hard as possible to find valid alignments when they exist
+
+``` {r bowtie_align, include=FALSE, echo=FALSE}
+tx <- readLines(logs$bowtie_align)
+bowtie_align <- sapply(c("command", "stats", "reported"), function(x) NULL)
+bowtie_align$command <- gsub("(INFO: Command: )(.*$)", "\\2",
+                             grep("Command:", tx, value = TRUE))
+# bowtie_align$stats <- grep("# reads", tx, value = TRUE)
+bowtie_align$stats <- gsub("# reads .*: (.*$)", "\\1", grep("# reads", tx, value = TRUE))
+bowtie_align$reported <-gsub("Reported ([0-9]+) alignments", "\\1", grep("^Reported", tx, value = TRUE))
+# cat("The command was: \n", bowtie_align$command, "\n")
+# cat("The stats are: \n", bowtie_align$stats, "\n")
+```
+
+The results are written to a `SAM` file. The statistics of alignment are:
+
+No. of unique reads | At least one alignment | Failed to align
+:---: | :---: | :---:
+`r bowtie_align$stats[[1]]` | `r bowtie_align$stats[[2]]` | `r bowtie_align$stats[[3]]`
+
+<!-- ## SNP filtering (optional) -->
+<!-- How to disable optinal blokcs of text elgantly? -->
+
+<!-- After converting the file to `BAM` format and sorting it, the reads are filtered for central-parto verlap with a location of known SNP. The match is dicarded if there is an overlap in the central `r snakemake@config$chip$probe_length - 2*snakemake@config$chip$probe_clip` bases. The SNP locations are specified in file *`r snakemake@config$variants$file`*. The `BAM` file is converted to `BED` format using `bedtools` and inverse-intersected with the `VCF` file. Only reads that remain after this operation are preserved from the original `BAM` file. -->
+
+
+``` {r featureCounts, include=FALSE, echo=FALSE, eval=FALSE}
+# not currently implemented
+tx <- readLines(logs$counts)
+feature_counts <- sapply(c("total", "success"), function(x) NULL)
+feature_counts$total <- gsub("(.*Total reads : )([0-9]+)(.*$)", "\\2",
+                             grep("Total reads :", tx, value = TRUE))
+feature_counts$success <- gsub("(.*Successfully assigned reads : )([0-9]+ \\([0-9]+\\.[0-9]%\\))(.*$)",
+                               "\\2", grep("Successfully assigned reads :", tx, value = TRUE))
+feature_counts$juncs <- gsub("(.*Found )([0-9]+)( junctions.*$)",
+                               "\\2", grep("Found [0-9]+ junctions", tx, value = TRUE))
+
+snp_percent_left <- round(as.numeric(feature_counts$total) / as.numeric(bowtie_align$reported) * 100, 2)
+snp_percent_left <- paste0("(", snp_percent_left,"%)")
+
+# <!--
+# No. of aligned reads | No. of alignments | No. of alignements after SNP filtering
+# :- - -: | :- - -: | :- - -:
+# `r unlist(strsplit(bowtie_align$stats[[2]], " "))[1]` | `r bowtie_align$reported` | `r paste(feature_counts$total, snp_percent_left)`
+# -->
+```
+
+<!--
+## Counting the reads
+
+The assignements of reads to metafeatures was done using `featureCounts` v1.6.1 from the `Subread` package. The counting was done on *`r snakemake@config$counts$feature`* level and summarized on *`r snakemake@config$counts$metafeature`* level. The information on features and metafeatures was drawn from the annotation file (*`r snakemake@config$annotation$file`*), downloaded from [Ensembl Plants Website](http://plants.ensembl.org/info/website/ftp/index.html). The summary statistics of counting are as follows:
+-->
+
+``` {r featureCounts2, include=FALSE, echo=FALSE, results="asis", eval=FALSE}
+tx <- read.table(snakemake@input$summary, sep = "\t", stringsAsFactors = F,
+                 header = TRUE, colClasses = c("character", "numeric"))
+tx <- subset(tx, tx[, 2] > 0)
+total <- sum(tx[, 2])
+percs <- round(tx[,2] / total * 100, 2)
+tx["Proportions [%]"] <- percs
+knitr::kable(tx, caption = "featureCounts statistics", row.names = FALSE)
+# <!--There were `r feature_counts$juncs` reported junctions. -->
+```
+## Results extraction
+
+The counted reads were then extracted using custom script *extract_results.py* in order to produce probes <-> metafeatures (*`r snakemake@config$counts$metafeature`*) assignements as an updated probeset definiton and subsequent generation of microarray chip annotation. If probe maps to more than one gene, it is discarded from the pool (denoted as *Multimapping reads*).
+
+### Affymetrix
+<!-- Could make these sections conditional but difficult to make it elegant. -->
+
+All probes in probeset were required to have unique strandendess and all probesets with only 1 or 2 probes were discarded ("Filtered Reads").
+
+### Agilent
+Only single probe makes a probeset for Agilent chip types.
+
+These are the summary statistics of the result extraction (*possibly repeating information mentioned already*):
+
+``` {r extract_results, include=FALSE, echo=FALSE, eval = FALSE, results="asis"}
+tx <- readLines(logs$results)
+extract_res <- sapply(c("total", "unassign", "filt", "multi"), function(x) NULL)
+extract_res$total <- gsub("(^Total number.*: )([0-9]+)\\.$", "\\2",
+                          grep("Total number", tx, value = TRUE))
+extract_res$filt <- gsub("(^Number of filtered.*: )([0-9]+)\\.$", "\\2",
+                         grep("filtered", tx, value = TRUE))
+extract_res$unassign <- gsub("(^Number of unassigned.*: )([0-9]+)\\.$", "\\2",
+                             grep("unassigned.", tx, value = TRUE))
+extract_res$multi <- gsub("(^Number of non\\-specific.*: )([0-9]+)\\.$", "\\2",
+                          grep("non\\-specific", tx, value = TRUE))
+res <- data.frame(extract_res, stringsAsFactors = F)
+res["left"] <- as.character(as.numeric(res$total) -
+                            sum(as.numeric(res[1, colnames(res) != "total"])))
+percs <- round(as.numeric(res[1, ]) / as.numeric(res$total) * 100, 2)
+res[2, ] <- percs
+colnames(res) <- c("Total", "Total Unassigned", "Filtered", "Multimapping", "Kept")
+rownames(res) <-c("Reads", "%")
+knitr::kable(res, caption = "Result exctraction statistics")
+```
+
+## Annotation Generation
+
+Depending in the platform we generate either `AnnotationDbi` package using `AnnotationForge` and `RSQLite` packages with `make_annodb.R` script (for *Agilent*) or `CDF` package using `affxparser` (for *Affy*). Here we have created a `r if (snakemake@config$platform=="Agilent") "DB" else "CDF"` package for `snakemake@config$platform` platform. Subsequently, we install the package and test it running an analysis with the `maQCNpipe` pipeline for microarray analysis.
+
+## Conclusion
+We have created a custom micrarray chip annotation file using the most recent genome assemblies and annotations. We can control the parameters of annotation creation, focusing e.g. on certain SNP locations or genomic locations.
+
+## Source
+<a download="report.Rmd" href="`r base64enc::dataURI(file = params$rmd, mime = 'text/rmd', encoding = 'base64')`">R Markdown source file (to produce this document)</a>
+
+## Session Info
+```{r sessionInfo, include=TRUE, echo=TRUE}
+sessionInfo()
+```
+
+## References

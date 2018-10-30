@@ -1,0 +1,23 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1538990742039.000,
+    "dirty" : true,
+    "encoding" : "UTF-8",
+    "folds" : "208|66|222|2|\n223|24|234|22|\n",
+    "hash" : "76201005",
+    "id" : "F9019D16",
+    "lastKnownWriteTime" : 1540387471,
+    "last_content_update" : 1540479048834,
+    "path" : "~/git/git-dev/CustomCDF/pipe/scripts/R/annodb.R",
+    "project_path" : "annodb.R",
+    "properties" : {
+        "cursorPosition" : "6,0",
+        "scrollLine" : "0",
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 3,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}
